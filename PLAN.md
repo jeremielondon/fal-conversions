@@ -1,123 +1,107 @@
-# FAL Conversions — Plan Complet
+# FAL Conversions — Plan
 
 ## Objectif
-Traquer le parcours complet : Google Ads → francaisalondres.com → vente Bokun.io
-Permettre à Google Ads d'optimiser via Smart Bidding grâce aux données de conversion.
+Remonter les **ventes réelles** (Stripe) comme conversions dans Google Ads pour optimiser le Smart Bidding.
 
-## Contexte
-- francaisalondres.com utilise Bokun.io pour les réservations/paiements
-- Google Ads : £250/mois, aucun tracking de conversion actuellement
-- Plausible Analytics déjà en place (sera remplacé par PostHog)
-- Ghost CMS sur Hetzner AX42 via Cloudron
+## Approche : Enhanced Conversions via email
 
-## Problème
-- Google Ads ne peut pas optimiser (Smart Bidding) sans données de conversion
-- Aucune visibilité sur quels mots-clés/annonces génèrent des ventes Bokun
-- Budget potentiellement gaspillé sur des mots-clés non-convertissants
+Le widget Bokun est un iframe → impossible de passer le gclid dans la réservation.
+Plausible supprime le gclid → incompatible avec Google Ads.
 
----
+**Solution :** Google Ads Enhanced Conversions matche les conversions par **email hashé** (SHA-256).
+Quand un client paye via Bokun/Stripe, son email est envoyé (hashé) à Google Ads qui le corrèle avec le compte Google qui a cliqué l'annonce.
 
-## Architecture Prévue
+```
+Google Ads (clic) → francaisalondres.com → page visite → widget Bokun → paiement Stripe
+                                                                              ↓
+                                                                    Webhook charge.succeeded
+                                                                              ↓
+                                                                    Email + montant extraits
+                                                                              ↓
+                                                                    SHA-256(email) → Google Ads API
+                                                                              ↓
+                                                                    Enhanced Conversion uploadée
+                                                                              ↓
+                                                                    Google Ads Smart Bidding optimise
+```
 
-### Étape 1 : Capture des paramètres (côté client)
-- **Google Tag Manager** sur francaisalondres.com
-- Capture UTM params + gclid à l'arrivée du visiteur
-- Stockage dans cookie first-party (durée 90 jours)
-- Event tracking des clics vers Bokun
+## Prérequis
+- Le client doit utiliser le **même email** sur Bokun/Stripe et sur son compte Google (ou un email connu de Google)
+- Google Ads matche en moyenne ~70% des conversions via email hashé
+- Suffisant pour que Smart Bidding optimise
 
-### Étape 2 : Passage d'attribution à Bokun
-- Quand le visiteur clique vers Bokun, ajouter les UTM/gclid en paramètres URL
-- Ou via custom fields Bokun si l'API le permet
-- Objectif : retrouver la source d'acquisition dans chaque vente
+## Ce qui est fait (code)
 
-### Étape 3 : Récupération des ventes (Bokun API)
-- API Bokun : https://docs.bokun.io/
-- Polling régulier (cron) ou webhook pour récupérer les nouvelles ventes
-- Extraire les métadonnées d'attribution (gclid, UTM)
+### Webhook + Google Ads API
+- `dashboard/app/api/webhook/stripe/route.ts` — Endpoint webhook Stripe
+  - Reçoit `charge.succeeded`
+  - Extrait email + montant de la charge
+  - Envoie l'Enhanced Conversion à Google Ads (email hashé SHA-256 + montant + devise + order ID)
+- `dashboard/lib/google-ads-conversions.ts` — Client Google Ads REST API
+  - Upload Enhanced Conversions via `uploadClickConversions`
+  - Utilise OAuth2 (refresh token) + developer token
+  - Hash l'email en SHA-256 (normalisé lowercase + trimmed)
 
-### Étape 4 : Remontée des conversions (Google Ads API)
-- Google Ads Conversion API (server-side, offline conversions)
-- Envoyer : gclid + montant de la vente + timestamp
-- Permet à Google d'optimiser les enchères automatiquement
+### Tracking site (optionnel, pour analytics)
+- `ghost-tracking.js` — Capture gclid/UTM en cookie, push `view_tour` si page avec widget Bokun
+- `gtm-container.json` — GA4 event `view_tour` + Google Ads Conversion tag
+- `setup.ts` — Injection script dans Ghost footer
 
-### Étape 5 : Analytics & Optimisation (PostHog)
-- Funnels : Google Ads → landing page → page Bokun → achat
-- Session replay : voir où les visiteurs bloquent
-- A/B testing : tester différentes versions de pages/CTAs
-- Dashboard : ROI par mot-clé, coût d'acquisition, taux de conversion
+### Dashboard
+- `dashboard/` — Next.js avec GA4 + Google Ads + Stripe
+- Vue Overview, Campagne Ads, Ventes
 
----
+## Étapes restantes (manuelles)
 
-## Stack Technique
+### Étape 1 — Google Ads : créer la conversion Enhanced
+1. Google Ads → Outils → Conversions → Nouvelle action de conversion
+2. Type : **Import** → **Manual import using API or uploads**
+3. Nom : `bokun_sale`
+4. Catégorie : **Purchase**
+5. Valeur : **Utiliser la valeur de chaque conversion** (montant Stripe)
+6. Comptage : **Toutes les conversions**
+7. Activer **Enhanced Conversions** dans les paramètres
+8. Noter le **Conversion Action ID** (visible dans l'URL : `conversionActions/XXXXXX`)
 
-| Composant | Outil | Hébergement |
-|-----------|-------|-------------|
-| Event capture (client) | Google Tag Manager | Gratuit (Google) |
-| Analytics & funnels | **PostHog** | Cloud gratuit (1M events/mois) ou self-hosted sur Dokploy |
-| Middleware conversion | Hono / Node.js | Dokploy (Hetzner) |
-| Booking/paiements | Bokun.io API | Existant |
-| Conversion upload | Google Ads Conversion API | Server-side |
-| Orchestration | Cron job | Dokploy |
+### Étape 2 — Google Ads : developer token
+1. Aller sur Google Ads API Center (Tools → API Center)
+2. Demander un **developer token** (si pas encore fait)
+3. En attendant l'approbation, le token test fonctionne sur le compte propre
 
----
+### Étape 3 — Stripe : créer le webhook
+1. Stripe Dashboard → Developers → Webhooks → Add endpoint
+2. URL : `https://<dashboard-url>/api/webhook/stripe`
+3. Events : sélectionner **`charge.succeeded`** uniquement
+4. Noter le **Webhook Secret** (`whsec_...`)
 
-## PostHog — Choix validé
+### Étape 4 — Configurer les env vars
+Dans `dashboard/.env` :
+```
+STRIPE_WEBHOOK_SECRET=whsec_...
+GOOGLE_ADS_DEVELOPER_TOKEN=...
+GOOGLE_ADS_CONVERSION_ACTION=customers/8016699315/conversionActions/XXXXXX
+```
 
-### Pourquoi PostHog plutôt que Jitsu
-- Product analytics complet (funnels, retention, parcours)
-- Session replay (voir le comportement visiteur)
-- A/B testing intégré
-- Heatmaps
-- API SQL interrogeable par Claude pour analyse et recommandations
-- Communauté active (20k+ GitHub stars)
+### Étape 5 — Déployer et tester
+1. Déployer le dashboard sur Dokploy
+2. Faire un paiement test (Stripe test mode)
+3. Vérifier les logs : `[Google Ads] Conversion uploaded: ch_xxx 29 gbp`
+4. Vérifier dans Google Ads → Conversions → `bokun_sale` que la conversion apparaît (24-48h)
 
-### Alternatives évaluées
-| Outil | Verdict |
-|-------|---------|
-| **Jitsu** | Bon CDP léger, mais pas d'analytics produit ni session replay |
-| **RudderStack** | Trop lourd (Kubernetes), overkill |
-| **Matomo** | Pas un vrai CDP, juste analytics web |
-| **Umami** | Trop basique, pas de routing d'events |
-| **Mixpanel** | Pas self-hosted, payant rapidement |
-| **Segment** | Propriétaire, cher |
+### Étape 6 — Activer Smart Bidding
+Après ~2 semaines / 30+ conversions :
+1. Google Ads → Campagne → Stratégie d'enchères → **Maximiser les conversions** ou **ROAS cible**
 
-### Déploiement PostHog
-- **Option 1 (recommandée pour démarrer)** : PostHog Cloud — gratuit jusqu'à 1M events/mois
-- **Option 2 (plus tard)** : Self-hosted sur Dokploy (serveur upgraded : 8 vCPU / 16 GB RAM / 160 GB)
-
----
-
-## APIs Clés
-- **Bokun API** : https://docs.bokun.io/
-- **Google Ads Conversion API** : offline conversion upload via gclid
-- **PostHog API** : queries SQL, events, funnels
-- **Google Tag Manager** : event capture côté client
-
----
-
-## Phases de mise en œuvre
-
-### Phase 1 — Tracking de base
-- [ ] Installer GTM sur francaisalondres.com (Ghost)
-- [ ] Configurer capture gclid + UTM → cookie
-- [ ] Installer PostHog (Cloud) sur le site
-- [ ] Configurer les events de base (page view, clic Bokun)
-
-### Phase 2 — Pipeline de conversion
-- [ ] Créer middleware Hono sur Dokploy
-- [ ] Intégrer Bokun API (récupération des ventes)
-- [ ] Mapper ventes → gclid via les paramètres passés
-- [ ] Configurer Google Ads Conversion API (upload offline)
-- [ ] Tester le pipeline complet
-
-### Phase 3 — Optimisation
-- [ ] Configurer funnels PostHog (Ads → landing → Bokun → achat)
-- [ ] Activer session replay
-- [ ] Premiers A/B tests sur les pages de conversion
-- [ ] Dashboard ROI par mot-clé / annonce
-- [ ] Analyse Claude des données PostHog pour recommandations
-
----
-
-## Status
-**PLANNING** — En attente de lancement
+## Env vars complètes (`dashboard/.env`)
+```
+DASHBOARD_PASSWORD=             # Mot de passe dashboard
+STRIPE_SECRET_KEY=              # Stripe API key (live)
+STRIPE_WEBHOOK_SECRET=          # Stripe webhook secret (whsec_...)
+GOOGLE_CLIENT_ID=               # Google OAuth
+GOOGLE_CLIENT_SECRET=           # Google OAuth
+GOOGLE_REFRESH_TOKEN=           # Google OAuth
+GA4_PROPERTY_ID=519319453       # GA4 property
+GOOGLE_ADS_CUSTOMER_ID=801-669-9315
+GOOGLE_ADS_DEVELOPER_TOKEN=     # Google Ads API (à obtenir)
+GOOGLE_ADS_CONVERSION_ACTION=   # customers/8016699315/conversionActions/XXXXXX
+```

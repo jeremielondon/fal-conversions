@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@google-analytics/data": "^4.8.0",
-    "google-ads-api": "^17.0.0",
+    "google-ads-api": "^23.0.0",
     "google-auth-library": "^10.6.1",
     "next": "^15.2.0",
     "react": "^19.0.0",

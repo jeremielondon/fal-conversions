@@ -1,6 +1,6 @@
 /**
  * FAL Conversions — Ghost code injection script
- * Captures UTM params + gclid, tracks outbound clicks to bokun.io
+ * Captures UTM params + gclid, fires "view_tour" on pages with Bokun widget
  * Injected via Ghost Admin API (setup.ts)
  */
 (function () {
@@ -8,7 +8,6 @@
 
   var COOKIE_NAME = "fal_attribution";
   var COOKIE_DAYS = 90;
-  var BOKUN_DOMAIN = "bokun.io";
 
   // --- Cookie helpers ---
   function setCookie(name, value, days) {
@@ -39,7 +38,6 @@
     var utm_term = params.get("utm_term");
     var utm_content = params.get("utm_content");
 
-    // Only update cookie if we have new attribution data
     if (gclid || utm_source) {
       var data = {
         gclid: gclid || "",
@@ -66,38 +64,38 @@
     }
   }
 
-  // --- Track clicks to Bokun ---
-  function trackBokunClicks() {
-    document.addEventListener("click", function (e) {
-      var link = e.target.closest("a[href]");
-      if (!link) return;
+  // --- Track tour page views (pages with Bokun widget) ---
+  function trackTourPageView() {
+    // Detect Bokun widget: looks for .bokunWidget, iframe[src*="bokun"], or the noscript fallback
+    var hasBokun =
+      document.querySelector(".bokunWidget") ||
+      document.querySelector('iframe[src*="bokun"]') ||
+      document.querySelector('script[src*="bokun"]');
 
-      var href = link.href;
-      try {
-        var url = new URL(href);
-        if (url.hostname.indexOf(BOKUN_DOMAIN) === -1) return;
-      } catch (err) {
-        return;
-      }
+    if (!hasBokun) return;
 
-      var attribution = getAttribution();
+    var attribution = getAttribution();
 
-      // Push to dataLayer for GTM
-      window.dataLayer = window.dataLayer || [];
-      window.dataLayer.push({
-        event: "click_bokun",
-        link_url: href,
-        link_text: (link.textContent || "").trim().slice(0, 100),
-        gclid: attribution.gclid || "",
-        utm_source: attribution.utm_source || "",
-        utm_medium: attribution.utm_medium || "",
-        utm_campaign: attribution.utm_campaign || "",
-        page_path: window.location.pathname,
-      });
+    window.dataLayer = window.dataLayer || [];
+    window.dataLayer.push({
+      event: "view_tour",
+      page_path: window.location.pathname,
+      page_title: document.title,
+      gclid: attribution.gclid || "",
+      utm_source: attribution.utm_source || "",
+      utm_medium: attribution.utm_medium || "",
+      utm_campaign: attribution.utm_campaign || "",
+      utm_term: attribution.utm_term || "",
     });
   }
 
   // --- Init ---
   captureAttribution();
-  trackBokunClicks();
+
+  // Wait for DOM to be ready (Bokun widget may load late)
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", trackTourPageView);
+  } else {
+    trackTourPageView();
+  }
 })();
