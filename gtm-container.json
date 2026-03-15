@@ -1,0 +1,186 @@
+{
+  "exportFormatVersion": 2,
+  "exportTime": "2026-03-15",
+  "containerVersion": {
+    "tag": [
+      {
+        "accountId": "",
+        "containerId": "",
+        "name": "GA4 Configuration",
+        "type": "gaawc",
+        "parameter": [
+          {
+            "type": "TEMPLATE",
+            "key": "measurementId",
+            "value": "G-94D1NH5B76"
+          },
+          {
+            "type": "BOOLEAN",
+            "key": "sendPageView",
+            "value": "true"
+          }
+        ],
+        "firingTriggerId": ["2147483647"],
+        "tagFiringOption": "ONCE_PER_EVENT"
+      },
+      {
+        "accountId": "",
+        "containerId": "",
+        "name": "GA4 Event - click_bokun",
+        "type": "gaawe",
+        "parameter": [
+          {
+            "type": "TEMPLATE",
+            "key": "eventName",
+            "value": "click_bokun"
+          },
+          {
+            "type": "TAG_REFERENCE",
+            "key": "measurementId",
+            "value": "GA4 Configuration"
+          },
+          {
+            "type": "LIST",
+            "key": "eventParameters",
+            "list": [
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "link_url" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - link_url}}" }
+                ]
+              },
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "link_text" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - link_text}}" }
+                ]
+              },
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "gclid" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - gclid}}" }
+                ]
+              },
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "utm_source" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - utm_source}}" }
+                ]
+              },
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "utm_medium" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - utm_medium}}" }
+                ]
+              },
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "utm_campaign" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - utm_campaign}}" }
+                ]
+              },
+              {
+                "type": "MAP",
+                "map": [
+                  { "type": "TEMPLATE", "key": "name", "value": "page_path" },
+                  { "type": "TEMPLATE", "key": "value", "value": "{{DLV - page_path}}" }
+                ]
+              }
+            ]
+          }
+        ],
+        "firingTriggerId": ["click_bokun_trigger"],
+        "tagFiringOption": "ONCE_PER_EVENT"
+      }
+    ],
+    "trigger": [
+      {
+        "accountId": "",
+        "containerId": "",
+        "triggerId": "click_bokun_trigger",
+        "name": "CE - click_bokun",
+        "type": "CUSTOM_EVENT",
+        "customEventFilter": [
+          {
+            "type": "EQUALS",
+            "parameter": [
+              { "type": "TEMPLATE", "key": "arg0", "value": "{{_event}}" },
+              { "type": "TEMPLATE", "key": "arg1", "value": "click_bokun" }
+            ]
+          }
+        ]
+      }
+    ],
+    "variable": [
+      {
+        "name": "DLV - link_url",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "link_url" }
+        ]
+      },
+      {
+        "name": "DLV - link_text",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "link_text" }
+        ]
+      },
+      {
+        "name": "DLV - gclid",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "gclid" }
+        ]
+      },
+      {
+        "name": "DLV - utm_source",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "utm_source" }
+        ]
+      },
+      {
+        "name": "DLV - utm_medium",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "utm_medium" }
+        ]
+      },
+      {
+        "name": "DLV - utm_campaign",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "utm_campaign" }
+        ]
+      },
+      {
+        "name": "DLV - page_path",
+        "type": "v",
+        "parameter": [
+          { "type": "INTEGER", "key": "dataLayerVersion", "value": "2" },
+          { "type": "BOOLEAN", "key": "setDefaultValue", "value": "false" },
+          { "type": "TEMPLATE", "key": "name", "value": "page_path" }
+        ]
+      }
+    ]
+  }
+}
