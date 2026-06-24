@@ -1,0 +1,17 @@
+{
+  "name": "fal-tracking-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "google-auth-library": "^9.15.0",
+    "stripe": "^17.7.0"
+  }
+}
