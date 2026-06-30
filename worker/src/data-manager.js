@@ -52,11 +52,15 @@ function mapConsent(value, fallback) {
   return "CONSENT_STATUS_UNSPECIFIED";
 }
 
-/** Accept either a full resource name (.../conversionActions/123) or a bare id → return the numeric id. */
-function conversionActionId() {
-  const raw = process.env.GOOGLE_ADS_CONVERSION_ACTION || process.env.GOOGLE_ADS_CONVERSION_ACTION_ID || "";
-  const m = String(raw).match(/(\d+)\s*$/);
+/** Extract the trailing numeric id from a full resource name (.../conversionActions/123) or a bare id. */
+function idFrom(raw) {
+  const m = String(raw || "").match(/(\d+)\s*$/);
   return m ? m[1] : "";
+}
+
+/** Default conversion action id from env (used when the caller doesn't pass one explicitly). */
+function conversionActionId() {
+  return idFrom(process.env.GOOGLE_ADS_CONVERSION_ACTION || process.env.GOOGLE_ADS_CONVERSION_ACTION_ID || "");
 }
 
 async function getAccessToken() {
@@ -66,13 +70,17 @@ async function getAccessToken() {
 }
 
 /**
- * @param {{ email:string, amount:number, currency:string, orderId:string, eventTimestamp:string }} p
+ * @param {{ email:string, amount?:number, value?:number, currency?:string, orderId:string,
+ *           eventTimestamp:string, gclid?:string, conversionActionId?:string }} p
+ *   `value` (leads, e.g. quote budget) takes precedence over `amount` (purchases); when both are
+ *   absent the conversion action's default value is used. `conversionActionId` overrides the env
+ *   default (lets one worker feed several conversion actions). `gclid` adds exact-match attribution.
  * @returns {Promise<{ ok:true, requestId?:string } | { ok:false, retryable:boolean, status?:number, error:string }>}
  */
 export async function uploadConversionEvent(p) {
   const operatingAccountId = (process.env.GOOGLE_ADS_CUSTOMER_ID || "").replace(/-/g, "");
   const loginAccountId = (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID || "").replace(/-/g, "");
-  const destId = conversionActionId();
+  const destId = p.conversionActionId ? idFrom(p.conversionActionId) : conversionActionId();
   const validateOnly = String(process.env.GOOGLE_ADS_VALIDATE_ONLY || "") === "true";
 
   if (!operatingAccountId) return { ok: false, retryable: false, error: "GOOGLE_ADS_CUSTOMER_ID not set" };
@@ -93,6 +101,24 @@ export async function uploadConversionEvent(p) {
   // recommended when managing via a manager account.
   if (loginAccountId) destination.loginAccount = { accountType: "GOOGLE_ADS", accountId: loginAccountId };
 
+  const event = {
+    eventTimestamp: p.eventTimestamp, // RFC3339, e.g. "2026-06-24T14:07:01.000Z"
+    transactionId: p.orderId, // dedup key within the destination
+    eventSource: "WEB",
+    userData: {
+      userIdentifiers: [{ emailAddress: hashEmailHex(p.email) }],
+    },
+  };
+  // Conversion value: leads pass `value` (budget), purchases pass `amount`. When absent, omit it
+  // so Google falls back to the conversion action's configured default value.
+  const value = p.value ?? p.amount;
+  if (value !== undefined && value !== null && Number(value) > 0) {
+    event.conversionValue = Number(value); // plain currency units (not micros)
+    event.currency = String(p.currency || "GBP").toUpperCase();
+  }
+  // gclid → exact-match attribution in addition to the hashed email.
+  if (p.gclid) event.adIdentifiers = { gclid: String(p.gclid) };
+
   const body = {
     destinations: [destination],
     encoding: "HEX",
@@ -100,18 +126,7 @@ export async function uploadConversionEvent(p) {
       adUserData: mapConsent(process.env.GOOGLE_ADS_CONSENT_AD_USER_DATA, "GRANTED"),
       adPersonalization: mapConsent(process.env.GOOGLE_ADS_CONSENT_AD_PERSONALIZATION, "GRANTED"),
     },
-    events: [
-      {
-        eventTimestamp: p.eventTimestamp, // RFC3339, e.g. "2026-06-24T14:07:01.000Z"
-        transactionId: p.orderId, // dedup key within the destination
-        conversionValue: p.amount, // plain currency units (not micros)
-        currency: String(p.currency).toUpperCase(),
-        eventSource: "WEB",
-        userData: {
-          userIdentifiers: [{ emailAddress: hashEmailHex(p.email) }],
-        },
-      },
-    ],
+    events: [event],
     validateOnly,
   };
 

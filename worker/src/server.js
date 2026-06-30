@@ -1,5 +1,6 @@
 import http from "node:http";
 import { verifyAndParse, extractConversion } from "./stripe-handler.js";
+import { verifyTallySignature, extractLead } from "./tally-handler.js";
 import { uploadConversionEvent } from "./data-manager.js";
 
 const PORT = Number(process.env.PORT || 3020);
@@ -69,6 +70,42 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, { received: true, uploaded: false, error: result.error });
   }
 
+  // Tally lead form (Tours Privés) → private_tour_lead conversion.
+  if (req.method === "POST" && req.url === "/webhook/tally") {
+    let payload;
+    try {
+      const raw = await readRawBody(req);
+      verifyTallySignature(raw, req.headers["tally-signature"], process.env.TALLY_SIGNING_SECRET);
+      payload = JSON.parse(raw.toString("utf8"));
+    } catch (err) {
+      console.warn("[tally] rejected:", err.message);
+      return send(res, 400, { error: "invalid signature or body" });
+    }
+
+    const lead = extractLead(payload);
+    if (lead.skip) {
+      console.log(`[tally] skip ${payload?.eventId || "-"}: ${lead.skip}`);
+      return send(res, 200, { received: true, skipped: lead.skip });
+    }
+
+    const result = await uploadConversionEvent({
+      ...lead,
+      conversionActionId: process.env.GOOGLE_ADS_LEAD_CONVERSION_ACTION,
+    });
+    if (result.ok) {
+      console.log(
+        `[data-manager] uploaded lead=${lead.orderId} ${lead.value ?? "-"} ${lead.currency} gclid=${lead.gclid ? "y" : "n"} requestId=${result.requestId || "-"}`
+      );
+      return send(res, 200, { received: true, uploaded: true });
+    }
+
+    console.error(
+      `[data-manager] lead upload FAILED lead=${lead.orderId} status=${result.status || "-"} retryable=${result.retryable}: ${result.error}`
+    );
+    if (result.retryable) return send(res, 500, { error: "upstream error, will retry" });
+    return send(res, 200, { received: true, uploaded: false, error: result.error });
+  }
+
   return send(res, 404, { error: "not found" });
 });
 
@@ -78,7 +115,9 @@ server.listen(PORT, "0.0.0.0", () => {
     (String(process.env.GOOGLE_ADS_VALIDATE_ONLY) === "true" ? " (VALIDATE_ONLY)" : ""));
   console.log("[fal-tracking] env:", {
     STRIPE_WEBHOOK_SECRET: present("STRIPE_WEBHOOK_SECRET"),
+    TALLY_SIGNING_SECRET: present("TALLY_SIGNING_SECRET"),
     GOOGLE_ADS_CONVERSION_ACTION: present("GOOGLE_ADS_CONVERSION_ACTION"),
+    GOOGLE_ADS_LEAD_CONVERSION_ACTION: present("GOOGLE_ADS_LEAD_CONVERSION_ACTION"),
     GOOGLE_ADS_CUSTOMER_ID: present("GOOGLE_ADS_CUSTOMER_ID"),
     GOOGLE_CLIENT_ID: present("GOOGLE_CLIENT_ID"),
     GOOGLE_REFRESH_TOKEN: present("GOOGLE_REFRESH_TOKEN"),
