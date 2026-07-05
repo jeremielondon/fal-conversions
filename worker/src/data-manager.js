@@ -116,8 +116,14 @@ export async function uploadConversionEvent(p) {
     event.conversionValue = Number(value); // plain currency units (not micros)
     event.currency = String(p.currency || "GBP").toUpperCase();
   }
-  // gclid → exact-match attribution in addition to the hashed email.
-  if (p.gclid) event.adIdentifiers = { gclid: String(p.gclid) };
+  // Ad click id → exact-match attribution in addition to the hashed email.
+  // gclid is the usual one; gbraid/wbraid cover iOS/privacy-restricted clicks.
+  if (p.gclid || p.gbraid || p.wbraid) {
+    event.adIdentifiers = {};
+    if (p.gclid) event.adIdentifiers.gclid = String(p.gclid);
+    if (p.gbraid) event.adIdentifiers.gbraid = String(p.gbraid);
+    if (p.wbraid) event.adIdentifiers.wbraid = String(p.wbraid);
+  }
 
   const body = {
     destinations: [destination],

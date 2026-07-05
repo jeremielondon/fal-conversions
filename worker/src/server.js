@@ -2,9 +2,51 @@ import http from "node:http";
 import { verifyAndParse, extractConversion } from "./stripe-handler.js";
 import { verifyTallySignature, extractLead } from "./tally-handler.js";
 import { uploadConversionEvent } from "./data-manager.js";
+import { loadStore, putClickId, getClickId } from "./attribution-store.js";
 
 const PORT = Number(process.env.PORT || 3020);
 const MAX_BODY = 1_000_000; // 1 MB — Stripe events are small
+
+// Where the thank-you page beacons are allowed to come from (comma-separated).
+const ALLOWED_ORIGINS = (process.env.ATTRIBUTION_ALLOWED_ORIGIN || "https://francaisalondres.com")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+// How long the Stripe webhook waits for the matching gclid beacon before falling
+// back to an email-only upload (kept well under Stripe's webhook timeout).
+const MATCH_WAIT_MS = Number(process.env.ATTRIBUTION_MATCH_WAIT_MS || 5000);
+
+loadStore();
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The gclid beacon (thank-you page) and the Stripe webhook race by a second or
+ * two. Poll the store briefly so the webhook can attach the gclid instead of
+ * uploading email-only. Returns the click-id entry, or undefined on timeout.
+ */
+async function waitForClickId(orderRef, budgetMs) {
+  const deadline = Date.now() + Math.max(0, budgetMs);
+  for (;;) {
+    const hit = getClickId(orderRef);
+    if (hit) return hit;
+    if (Date.now() >= deadline) return undefined;
+    await sleep(400);
+  }
+}
+
+/** CORS headers for the /attribution/link endpoint (echo allowed origin only). */
+function corsHeaders(req) {
+  const h = { "Content-Type": "application/json" };
+  const origin = req.headers.origin || "";
+  if (ALLOWED_ORIGINS.includes(origin)) {
+    h["Access-Control-Allow-Origin"] = origin;
+    h["Access-Control-Allow-Methods"] = "POST, OPTIONS";
+    h["Access-Control-Allow-Headers"] = "Content-Type";
+    h["Access-Control-Max-Age"] = "86400";
+  }
+  return h;
+}
 
 function readRawBody(req) {
   return new Promise((resolve, reject) => {
@@ -51,10 +93,21 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { received: true, skipped: conv.skip });
     }
 
+    // Enrich with the gclid the thank-you page beaconed for this order reference
+    // (joins on the "OR-xx" TicketingHub ref read from the PI/charge description).
+    if (conv.orderRef) {
+      const hit = await waitForClickId(conv.orderRef, MATCH_WAIT_MS);
+      if (hit) {
+        conv.gclid = hit.gclid;
+        conv.gbraid = hit.gbraid;
+        conv.wbraid = hit.wbraid;
+      }
+    }
+
     const result = await uploadConversionEvent(conv);
     if (result.ok) {
       console.log(
-        `[data-manager] uploaded order=${conv.orderId} ${conv.amount} ${conv.currency} (${event.type}) requestId=${result.requestId || "-"}`
+        `[data-manager] uploaded order=${conv.orderId} ref=${conv.orderRef || "-"} gclid=${conv.gclid ? "y" : "n"} ${conv.amount} ${conv.currency} (${event.type}) requestId=${result.requestId || "-"}`
       );
       return send(res, 200, { received: true, uploaded: true });
     }
@@ -68,6 +121,39 @@ const server = http.createServer(async (req, res) => {
     }
     // Permanent failure (bad config/data): ack so Stripe doesn't hammer the endpoint.
     return send(res, 200, { received: true, uploaded: false, error: result.error });
+  }
+
+  // Thank-you page beacon: {orderRef, gclid, gbraid?, wbraid?} captured
+  // first-party on the booking flow. Stored so the Stripe webhook can join it.
+  if (req.url === "/attribution/link") {
+    if (req.method === "OPTIONS") {
+      res.writeHead(204, corsHeaders(req));
+      return res.end();
+    }
+    if (req.method === "POST") {
+      const origin = req.headers.origin || "";
+      // sendBeacon includes Origin on cross-origin POSTs; reject anything not
+      // from the site. (Low-stakes data, but this blocks casual spoofing.)
+      if (origin && !ALLOWED_ORIGINS.includes(origin)) {
+        console.warn(`[attribution] rejected origin: ${origin}`);
+        return send(res, 403, { error: "forbidden origin" });
+      }
+      let data;
+      try {
+        const raw = await readRawBody(req); // text/plain blob from sendBeacon
+        data = JSON.parse(raw.toString("utf8"));
+      } catch {
+        return send(res, 400, { error: "bad body" });
+      }
+      const stored = putClickId(data?.orderRef, {
+        gclid: data?.gclid,
+        gbraid: data?.gbraid,
+        wbraid: data?.wbraid,
+      });
+      console.log(`[attribution] link ref=${data?.orderRef || "-"} gclid=${data?.gclid ? "y" : "n"} stored=${stored}`);
+      res.writeHead(stored ? 204 : 202, corsHeaders(req));
+      return res.end();
+    }
   }
 
   // Tally lead form (Tours Privés) → private_tour_lead conversion.
@@ -121,5 +207,7 @@ server.listen(PORT, "0.0.0.0", () => {
     GOOGLE_ADS_CUSTOMER_ID: present("GOOGLE_ADS_CUSTOMER_ID"),
     GOOGLE_CLIENT_ID: present("GOOGLE_CLIENT_ID"),
     GOOGLE_REFRESH_TOKEN: present("GOOGLE_REFRESH_TOKEN"),
+    ATTRIBUTION_ALLOWED_ORIGIN: ALLOWED_ORIGINS.join(","),
+    ATTRIBUTION_STORE_PATH: process.env.ATTRIBUTION_STORE_PATH || "(memory)",
   });
 });

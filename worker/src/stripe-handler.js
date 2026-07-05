@@ -21,6 +21,22 @@ function toRfc3339(unixSeconds) {
 }
 
 /**
+ * TicketingHub stamps its order reference ("OR-E4 …") into the charge/PI
+ * description and often the Checkout session client_reference_id. We read it to
+ * join the sale with the gclid the thank-you page posted to /attribution/link.
+ * Returns "" when no reference is found (→ email-only upload, as before).
+ */
+export function extractOrderRef(event) {
+  const o = event?.data?.object || {};
+  const candidates = [o.description, o.client_reference_id, o.statement_descriptor, o.statement_descriptor_suffix];
+  for (const c of candidates) {
+    const m = String(c || "").match(/\bOR-[A-Z0-9]+\b/i);
+    if (m) return m[0].toUpperCase();
+  }
+  return "";
+}
+
+/**
  * Map a Stripe event to a conversion payload, or a {skip} reason.
  *
  * Primary event: checkout.session.completed (TicketingHub → Stripe Checkout).
@@ -31,6 +47,7 @@ function toRfc3339(unixSeconds) {
  */
 export function extractConversion(event) {
   const when = toRfc3339(event.created);
+  const orderRef = extractOrderRef(event);
 
   if (event.type === "checkout.session.completed") {
     const s = event.data.object;
@@ -44,6 +61,7 @@ export function extractConversion(event) {
       amount,
       currency: s.currency,
       orderId: s.payment_intent || s.id,
+      orderRef,
       eventTimestamp: when,
     };
   }
@@ -60,6 +78,7 @@ export function extractConversion(event) {
       amount,
       currency: c.currency,
       orderId: c.payment_intent || c.id,
+      orderRef,
       eventTimestamp: when,
     };
   }

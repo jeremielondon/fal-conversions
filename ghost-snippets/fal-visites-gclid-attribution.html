@@ -1,0 +1,87 @@
+<!--
+  FAL Visites — Attribution gclid des tours publics (TicketingHub → worker).
+
+  OÙ L'INSTALLER : Ghost → Settings → Code injection → SITE HEADER (site-wide).
+  Site-wide pour capter le gclid quelle que soit la page d'atterrissage de la pub
+  (l'écouteur ne se déclenche que là où le widget TicketingHub est présent).
+
+  POURQUOI (résumé de l'investigation 2026-07-05) :
+  - TicketingHub est une plateforme Stripe Connect + widget iframe cross-origin :
+    on ne peut PAS écrire le gclid dans les metadata Stripe.
+  - Son intégration GA4 "purchase" ne remonte PAS chez nous (0 vente trackée sur
+    ~13 ventes réelles) → abandonné.
+  - MAIS le widget poste toujours à la page parente, à la fin d'une vente :
+        ["checkout_analytics","purchase",{ …, "reference":"OR-E7", … }]
+    (vérifié en live : origin https://assets.ticketinghub.com). On y lit
+    `order.reference` (= "OR-xx", exactement ce que le worker lit dans la
+    description du PaymentIntent Stripe) et on l'envoie au worker avec le gclid.
+
+  FLUX : pub (gclid) → localStorage → écoute du message d'achat → sendBeacon
+  {orderRef, gclid} → worker /attribution/link → jointure sur OR-xx côté Stripe
+  → conversion Google Ads avec gclid (exact match) + email (enhanced).
+-->
+<script>
+(function () {
+  var ENDPOINT = "https://hook-stripe.francaisalondres.com/attribution/link";
+  var STORE = "fal_click";
+
+  // 1) Capture l'ad click id (gclid/gbraid/wbraid) en first-party (last paid click).
+  //    Les visites organiques (sans click id) ne touchent à rien.
+  try {
+    var qs = new URLSearchParams(location.search);
+    var found = {};
+    ["gclid", "gbraid", "wbraid"].forEach(function (k) {
+      var v = qs.get(k);
+      if (v) found[k] = v;
+    });
+    if (Object.keys(found).length) {
+      found.ts = Date.now();
+      localStorage.setItem(STORE, JSON.stringify(found));
+    }
+  } catch (e) {}
+
+  function readClick() {
+    try {
+      var c = JSON.parse(localStorage.getItem(STORE) || "null");
+      if (c && (c.gclid || c.gbraid || c.wbraid)) return c;
+    } catch (e) {}
+    return null;
+  }
+
+  // 2) Écoute le message de succès de TicketingHub (émis sur la page de résa,
+  //    juste avant la redirection) → extrait order.reference → beacon au worker.
+  function originOk(origin) {
+    try { return /(^|\.)ticketinghub\.com$/.test(new URL(origin).hostname); }
+    catch (e) { return false; }
+  }
+
+  function extractOrder(data) {
+    var arr;
+    try { arr = (typeof data === "string") ? JSON.parse(data) : data; }
+    catch (e) { return null; }
+    if (!Array.isArray(arr) || !arr.length) return null;
+    // ["checkout_analytics","purchase",{order}]
+    if (arr[0] === "checkout_analytics" && arr[1] === "purchase" && arr[2] && arr[2].reference) return arr[2];
+    // ["ticketinghub:checkout:order:confirmed",{order}]  (signal équivalent)
+    if (arr[0] === "ticketinghub:checkout:order:confirmed" && arr[1] && arr[1].reference) return arr[1];
+    return null;
+  }
+
+  var sentRefs = {};
+  window.addEventListener("message", function (e) {
+    if (!originOk(e.origin)) return;
+    var order = extractOrder(e.data);
+    if (!order || !order.reference) return;
+    var ref = String(order.reference).toUpperCase();
+    if (!/^OR-[A-Z0-9]+$/.test(ref) || sentRefs[ref]) return;
+
+    var click = readClick();
+    if (!click) return; // réservation organique → rien à attribuer
+    sentRefs[ref] = 1;
+    try {
+      var payload = { orderRef: ref, gclid: click.gclid, gbraid: click.gbraid, wbraid: click.wbraid };
+      navigator.sendBeacon(ENDPOINT, new Blob([JSON.stringify(payload)], { type: "text/plain" }));
+    } catch (e2) {}
+  }, false);
+})();
+</script>
