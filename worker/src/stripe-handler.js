@@ -52,8 +52,9 @@ export function extractConversion(event) {
   if (event.type === "checkout.session.completed") {
     const s = event.data.object;
     if (s.payment_status && s.payment_status !== "paid") return { skip: `payment_status:${s.payment_status}` };
-    const email = s.customer_details?.email || s.customer_email;
-    if (!email) return { skip: "no_email" };
+    // email may be absent (TicketingHub charges keep it on the customer, not the
+    // event) → don't skip here; the beacon supplies it, or the gclid suffices.
+    const email = s.customer_details?.email || s.customer_email || undefined;
     const amount = (s.amount_total ?? 0) / 100;
     if (!amount) return { skip: "zero_amount" };
     return {
@@ -69,8 +70,9 @@ export function extractConversion(event) {
   if (event.type === "charge.succeeded") {
     const c = event.data.object;
     if (c.refunded) return { skip: "refunded" };
-    const email = c.billing_details?.email || c.receipt_email;
-    if (!email) return { skip: "no_email" };
+    // email often null on TicketingHub charges (lives on the customer object) →
+    // don't skip; the attribution beacon carries it, or the gclid stands alone.
+    const email = c.billing_details?.email || c.receipt_email || undefined;
     const amount = (c.amount ?? 0) / 100;
     if (!amount) return { skip: "zero_amount" };
     return {

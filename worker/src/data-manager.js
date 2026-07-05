@@ -41,7 +41,7 @@ function normalizeEmail(email) {
   return e;
 }
 
-function hashEmailHex(email) {
+export function hashEmailHex(email) {
   return crypto.createHash("sha256").update(normalizeEmail(email)).digest("hex");
 }
 
@@ -85,6 +85,11 @@ export async function uploadConversionEvent(p) {
 
   if (!operatingAccountId) return { ok: false, retryable: false, error: "GOOGLE_ADS_CUSTOMER_ID not set" };
   if (!destId) return { ok: false, retryable: false, error: "GOOGLE_ADS_CONVERSION_ACTION (id) not set" };
+  // Data Manager needs ≥1 identifier (hashed email and/or ad click id). Fail fast
+  // before spending an OAuth token on an unsendable event.
+  if (!p.emailHash && !p.email && !p.gclid && !p.gbraid && !p.wbraid) {
+    return { ok: false, retryable: false, error: "no_identifier (email + gclid both absent)" };
+  }
 
   let accessToken;
   try {
@@ -105,10 +110,13 @@ export async function uploadConversionEvent(p) {
     eventTimestamp: p.eventTimestamp, // RFC3339, e.g. "2026-06-24T14:07:01.000Z"
     transactionId: p.orderId, // dedup key within the destination
     eventSource: "WEB",
-    userData: {
-      userIdentifiers: [{ emailAddress: hashEmailHex(p.email) }],
-    },
   };
+  // Hashed email → "enhanced conversions" identifier. Accept a pre-hashed HEX
+  // (`emailHash`, e.g. from the attribution beacon) or a plaintext `email`.
+  // Optional: a gclid alone is a valid identifier (TicketingHub charges often
+  // carry no inline email — it lives on the customer object, not the charge).
+  const emailHex = p.emailHash || (p.email ? hashEmailHex(p.email) : undefined);
+  if (emailHex) event.userData = { userIdentifiers: [{ emailAddress: emailHex }] };
   // Conversion value: leads pass `value` (budget), purchases pass `amount`. When absent, omit it
   // so Google falls back to the conversion action's configured default value.
   const value = p.value ?? p.amount;

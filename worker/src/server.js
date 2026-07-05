@@ -1,7 +1,7 @@
 import http from "node:http";
 import { verifyAndParse, extractConversion } from "./stripe-handler.js";
 import { verifyTallySignature, extractLead } from "./tally-handler.js";
-import { uploadConversionEvent } from "./data-manager.js";
+import { uploadConversionEvent, hashEmailHex } from "./data-manager.js";
 import { loadStore, putClickId, getClickId } from "./attribution-store.js";
 
 const PORT = Number(process.env.PORT || 3020);
@@ -93,21 +93,30 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, { received: true, skipped: conv.skip });
     }
 
-    // Enrich with the gclid the thank-you page beaconed for this order reference
-    // (joins on the "OR-xx" TicketingHub ref read from the PI/charge description).
+    // Enrich with the gclid + hashed email the booking page beaconed for this
+    // order reference (joins on the "OR-xx" TicketingHub ref read from the
+    // PI/charge description; TicketingHub charges carry no inline email).
     if (conv.orderRef) {
       const hit = await waitForClickId(conv.orderRef, MATCH_WAIT_MS);
       if (hit) {
         conv.gclid = hit.gclid;
         conv.gbraid = hit.gbraid;
         conv.wbraid = hit.wbraid;
+        conv.emailHash = hit.emailHash;
       }
+    }
+
+    // Need ≥1 identifier: email from the charge, hashed email from the beacon, or
+    // an ad click id. Organic sales with none (no inline email, no beacon) → skip.
+    if (!conv.email && !conv.emailHash && !conv.gclid && !conv.gbraid && !conv.wbraid) {
+      console.log(`[webhook] skip ${event.id} (${event.type}): no_identifier ref=${conv.orderRef || "-"}`);
+      return send(res, 200, { received: true, skipped: "no_identifier" });
     }
 
     const result = await uploadConversionEvent(conv);
     if (result.ok) {
       console.log(
-        `[data-manager] uploaded order=${conv.orderId} ref=${conv.orderRef || "-"} gclid=${conv.gclid ? "y" : "n"} ${conv.amount} ${conv.currency} (${event.type}) requestId=${result.requestId || "-"}`
+        `[data-manager] uploaded order=${conv.orderId} ref=${conv.orderRef || "-"} gclid=${conv.gclid ? "y" : "n"} email=${(conv.email || conv.emailHash) ? "y" : "n"} ${conv.amount} ${conv.currency} (${event.type}) requestId=${result.requestId || "-"}`
       );
       return send(res, 200, { received: true, uploaded: true });
     }
@@ -145,12 +154,16 @@ const server = http.createServer(async (req, res) => {
       } catch {
         return send(res, 400, { error: "bad body" });
       }
+      // hash the email immediately (never store/log the plaintext) — it's the
+      // second identifier since TicketingHub charges carry no inline email.
+      const emailHash = data?.email ? hashEmailHex(String(data.email)) : undefined;
       const stored = putClickId(data?.orderRef, {
         gclid: data?.gclid,
         gbraid: data?.gbraid,
         wbraid: data?.wbraid,
+        emailHash,
       });
-      console.log(`[attribution] link ref=${data?.orderRef || "-"} gclid=${data?.gclid ? "y" : "n"} stored=${stored}`);
+      console.log(`[attribution] link ref=${data?.orderRef || "-"} gclid=${data?.gclid ? "y" : "n"} email=${emailHash ? "y" : "n"} stored=${stored}`);
       res.writeHead(stored ? 204 : 202, corsHeaders(req));
       return res.end();
     }

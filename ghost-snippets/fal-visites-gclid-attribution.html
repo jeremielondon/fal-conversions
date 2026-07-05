@@ -79,7 +79,10 @@
     if (!click) return; // réservation organique → rien à attribuer
     sentRefs[ref] = 1;
     try {
-      var payload = { orderRef: ref, gclid: click.gclid, gbraid: click.gbraid, wbraid: click.wbraid };
+      // l'email du client (le charge Stripe n'en porte pas) sert de 2e identifiant ;
+      // le worker le hashe côté serveur, jamais stocké/loggé en clair.
+      var email = (order.customer && order.customer.email) || undefined;
+      var payload = { orderRef: ref, gclid: click.gclid, gbraid: click.gbraid, wbraid: click.wbraid, email: email };
       navigator.sendBeacon(ENDPOINT, new Blob([JSON.stringify(payload)], { type: "text/plain" }));
     } catch (e2) {}
   }, false);

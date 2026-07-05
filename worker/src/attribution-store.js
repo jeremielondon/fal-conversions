@@ -30,6 +30,7 @@ const map = new Map();
 
 const REF_RE = /^OR-[A-Z0-9]{1,24}$/;
 const CLICKID_RE = /^[A-Za-z0-9._-]{6,1024}$/;
+const EMAILHASH_RE = /^[a-f0-9]{64}$/;
 
 /** Normalise + validate an order reference, or return "" if it doesn't look like one. */
 export function normRef(raw) {
@@ -81,15 +82,17 @@ export function loadStore() {
  * beacon clobbering the real ad click).
  * @returns {boolean} true if a valid ref + at least one click id was stored/kept.
  */
-export function putClickId(orderRef, { gclid, gbraid, wbraid } = {}) {
+export function putClickId(orderRef, { gclid, gbraid, wbraid, emailHash } = {}) {
   const ref = normRef(orderRef);
   if (!ref) return false;
   const entry = {
     gclid: validClickId(gclid),
     gbraid: validClickId(gbraid),
     wbraid: validClickId(wbraid),
+    emailHash: emailHash && EMAILHASH_RE.test(String(emailHash)) ? String(emailHash) : undefined,
     ts: Date.now(),
   };
+  // beacon always carries a click id; the emailHash rides along as a second identifier
   if (!entry.gclid && !entry.gbraid && !entry.wbraid) return false;
   if (map.has(ref)) return true; // first-touch — keep the original
   map.set(ref, entry);
