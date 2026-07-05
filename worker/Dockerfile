@@ -11,6 +11,10 @@ RUN npm install --omit=dev --no-audit --no-fund
 
 COPY src ./src
 
+# Persistent attribution store (ref→gclid). Created + owned by `node` so the
+# named volume mounted at /data inherits writable ownership on first creation.
+RUN mkdir -p /data && chown node:node /data
+
 # Run unprivileged (node:alpine ships a `node` user)
 USER node
 
