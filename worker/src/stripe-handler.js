@@ -1,11 +1,58 @@
 import Stripe from "stripe";
 
 /**
- * Stripe lives ONLY for signature verification here — constructEvent uses the
- * webhook signing secret, not the API key, so STRIPE_SECRET_KEY is optional
- * (only needed later if we want to enrich events via the Stripe API).
+ * Signature verification only needs the webhook secret. The API key is what lets
+ * us re-read a charge (see fetchEmailFromStripe) — without it the worker still
+ * runs, it just can't recover the buyer's email.
  */
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "sk_unused_for_signature_verification");
+const API_KEY = process.env.STRIPE_SECRET_KEY || "";
+const stripe = new Stripe(API_KEY || "sk_unused_for_signature_verification");
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * TicketingHub finalises the order slightly AFTER Stripe fires charge.succeeded:
+ * the webhook payload carries no billing_details.email / receipt_email, yet the
+ * same charge (and its customer) hold one moments later. Re-read it so every sale
+ * ships at least one identifier — otherwise Google can never tie a sale back to
+ * an ad click and tour_purchase stays stuck at zero.
+ *
+ * Safe by construction: Google only credits a conversion it can match to a real
+ * ad click, so uploading organic sales cannot inflate the numbers.
+ *
+ * Returns undefined when no key is configured or the lookup fails — the caller
+ * then skips the event exactly as before.
+ */
+export async function fetchEmailFromStripe({ chargeId, customerId }) {
+  if (!API_KEY || (!chargeId && !customerId)) return undefined;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await sleep(2000); // the order may still be settling on their side
+    try {
+      let custId = customerId;
+
+      if (chargeId) {
+        const charge = await stripe.charges.retrieve(chargeId, { expand: ["customer"] });
+        const cust = charge?.customer;
+        const email =
+          charge?.billing_details?.email ||
+          charge?.receipt_email ||
+          (typeof cust === "object" ? cust?.email : undefined);
+        if (email) return email;
+        custId = custId || (typeof cust === "string" ? cust : cust?.id);
+      }
+
+      if (custId) {
+        const customer = await stripe.customers.retrieve(custId);
+        if (customer?.email) return customer.email;
+      }
+    } catch (err) {
+      console.warn(`[stripe] email lookup failed: ${err.message}`);
+      return undefined;
+    }
+  }
+  return undefined;
+}
 
 /** Verify the Stripe signature and return the parsed event. Throws on bad signature. */
 export function verifyAndParse(rawBody, signature) {
@@ -63,6 +110,7 @@ export function extractConversion(event) {
       currency: s.currency,
       orderId: s.payment_intent || s.id,
       orderRef,
+      customerId: typeof s.customer === "string" ? s.customer : s.customer?.id,
       eventTimestamp: when,
     };
   }
@@ -70,8 +118,8 @@ export function extractConversion(event) {
   if (event.type === "charge.succeeded") {
     const c = event.data.object;
     if (c.refunded) return { skip: "refunded" };
-    // email often null on TicketingHub charges (lives on the customer object) →
-    // don't skip; the attribution beacon carries it, or the gclid stands alone.
+    // Almost always absent on TicketingHub charges at webhook time — the server
+    // recovers it from the Stripe API via chargeId/customerId (fetchEmailFromStripe).
     const email = c.billing_details?.email || c.receipt_email || undefined;
     const amount = (c.amount ?? 0) / 100;
     if (!amount) return { skip: "zero_amount" };
@@ -81,6 +129,8 @@ export function extractConversion(event) {
       currency: c.currency,
       orderId: c.payment_intent || c.id,
       orderRef,
+      chargeId: c.id,
+      customerId: typeof c.customer === "string" ? c.customer : c.customer?.id,
       eventTimestamp: when,
     };
   }

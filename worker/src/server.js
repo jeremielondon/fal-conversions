@@ -1,5 +1,5 @@
 import http from "node:http";
-import { verifyAndParse, extractConversion } from "./stripe-handler.js";
+import { verifyAndParse, extractConversion, fetchEmailFromStripe } from "./stripe-handler.js";
 import { verifyTallySignature, extractLead } from "./tally-handler.js";
 import { uploadConversionEvent, hashEmailHex } from "./data-manager.js";
 import { loadStore, putClickId, getClickId } from "./attribution-store.js";
@@ -104,6 +104,16 @@ const server = http.createServer(async (req, res) => {
         conv.wbraid = hit.wbraid;
         conv.emailHash = hit.emailHash;
       }
+    }
+
+    // Last resort: TicketingHub attaches the buyer's email to the charge only
+    // *after* the webhook fires, so the payload looks identifier-less even for
+    // ad-driven sales (beacon misses cross-device, private windows, cleared
+    // storage). Re-read the charge so the sale still ships an enhanced-conversion
+    // email. Google credits it only if it can match a real ad click, so organic
+    // sales cannot inflate the count.
+    if (!conv.email && !conv.emailHash && !conv.gclid && !conv.gbraid && !conv.wbraid) {
+      conv.email = await fetchEmailFromStripe({ chargeId: conv.chargeId, customerId: conv.customerId });
     }
 
     // Need ≥1 identifier: email from the charge, hashed email from the beacon, or

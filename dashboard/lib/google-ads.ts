@@ -32,10 +32,21 @@ export interface GoogleAdsData {
   suggestions: string[];
 }
 
+const DATE_FORMAT = /^\d{4}-\d{2}-\d{2}$/;
+
+function validateDateRange(startDate: string, endDate: string): void {
+  if (!DATE_FORMAT.test(startDate) || !DATE_FORMAT.test(endDate)) {
+    throw new Error(
+      `Invalid date format. Expected YYYY-MM-DD, got startDate="${startDate}", endDate="${endDate}"`
+    );
+  }
+}
+
 export async function getGoogleAdsData(
   startDate: string,
   endDate: string
 ): Promise<GoogleAdsData> {
+  validateDateRange(startDate, endDate);
   const client = getClient();
   const customerId = (process.env.GOOGLE_ADS_CUSTOMER_ID || "").replace(
     /-/g,

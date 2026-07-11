@@ -3,6 +3,7 @@
  * Injects the tracking script into Ghost's site-wide code injection (footer).
  * Usage: npx tsx setup.ts
  */
+import "dotenv/config";
 import { SignJWT } from "jose";
 import { readFileSync } from "fs";
 import { resolve, dirname } from "path";
@@ -12,8 +13,12 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // --- Config ---
 const GHOST_URL = "https://francaisalondres.com";
-const GHOST_ADMIN_KEY =
-  "688e81a3b9e11600010e5c91:ed3c7376d8f4bbd2144c69bdd8d704bcd4f83b1dc8e96f643eb8467de78bfe21";
+const GHOST_ADMIN_KEY = process.env.GHOST_ADMIN_KEY;
+if (!GHOST_ADMIN_KEY) {
+  throw new Error(
+    "GHOST_ADMIN_KEY is not set. Add it to your .env file (format: id:secret)"
+  );
+}
 
 // --- Ghost JWT ---
 async function makeGhostToken(): Promise<string> {
